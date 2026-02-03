@@ -1,0 +1,41 @@
+{
+  "name": "vibe-code-rag-api",
+  "version": "1.0.0",
+  "description": "NestJS-based RAG (Retrieval-Augmented Generation) API",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\""
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@nestjs/common": "^10.0.0",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^10.0.0",
+    "@nestjs/platform-express": "^10.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.0",
+    "dotenv": "^17.2.3",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.0.0",
+    "@nestjs/schematics": "^10.0.0",
+    "@nestjs/testing": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-import": "^2.29.0",
+    "prettier": "^3.0.0",
+    "ts-loader": "^9.0.0",
+    "ts-node": "^10.0.0",
+    "tsconfig-paths": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "license": "MIT"
+}
