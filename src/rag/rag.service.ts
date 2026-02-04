@@ -1,6 +1,8 @@
 import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common"
 import { GoogleGenAI } from "@google/genai"
-import { InMemoryVectorStore, StoredDocument } from "./vector-store"
+import { StoredDocument } from "./vector-store"
+import { FaissVectorStore } from "./faiss-vector-store"
+import { FirebaseDocSource } from "./firebase-doc-source"
 
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
 const DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
@@ -9,7 +11,7 @@ const DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
 export class RagService {
     private readonly logger = new Logger(RagService.name)
     private readonly ai: GoogleGenAI | null
-    private readonly vectorStore = new InMemoryVectorStore()
+    private readonly vectorStore = new FaissVectorStore()
 
     constructor() {
         const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
@@ -22,37 +24,51 @@ export class RagService {
             this.ai = new GoogleGenAI({ apiKey })
         }
 
-        void this.bootstrapSampleDocuments()
+        void this.bootstrapDocuments()
     }
 
-    private async bootstrapSampleDocuments() {
-        const sampleDocs: Omit<StoredDocument, "embedding">[] = [
-            {
-                id: "intro-nestjs",
-                text: "NestJS is a progressive Node.js framework for building efficient and scalable server-side applications.",
-                metadata: { topic: "nestjs", type: "intro" },
-            },
-            {
-                id: "intro-rag",
-                text: "Retrieval-Augmented Generation (RAG) combines information retrieval with text generation models to ground responses in external knowledge.",
-                metadata: { topic: "rag", type: "concept" },
-            },
-            {
-                id: "rag-pipeline",
-                text: "A basic RAG pipeline has three steps: retrieve relevant documents, construct a prompt with the retrieved context, and generate an answer with a language model.",
-                metadata: { topic: "rag", type: "pipeline" },
-            },
-        ]
+    private async bootstrapDocuments() {
+        try {
+            const collectionPath = process.env.FIREBASE_RAG_COLLECTION_PATH ?? "Retrievers"
+            const textField = process.env.FIREBASE_RAG_TEXT_FIELD ?? "retriever_description" // ← Changed!
+            const metadataFields = (
+                process.env.FIREBASE_RAG_METADATA_FIELDS ?? "retriever_name,document"
+            ) // ← Changed!
+                .split(",")
+                .map(f => f.trim())
 
-        for (const doc of sampleDocs) {
-            const embedding = await this.embedText(doc.text)
-            this.vectorStore.addDocument({
-                ...doc,
-                embedding,
+            const source = new FirebaseDocSource({
+                collectionPath,
+                textField,
+                metadataFields,
             })
-        }
 
-        this.logger.log(`Bootstrapped ${sampleDocs.length} sample documents into the vector store.`)
+            const firebaseDocs: Omit<StoredDocument, "embedding">[] = await source.loadDocuments()
+
+            if (!firebaseDocs.length) {
+                this.logger.warn(
+                    `No documents loaded from Firestore collection "${collectionPath}". RAG will have no external knowledge until documents are added.`,
+                )
+                return
+            }
+
+            for (const doc of firebaseDocs) {
+                const embedding = await this.embedText(doc.text)
+                this.vectorStore.addDocument({
+                    ...doc,
+                    embedding,
+                })
+            }
+
+            this.logger.log(
+                `Bootstrapped ${firebaseDocs.length} Firestore documents into the FAISS vector store.`,
+            )
+        } catch (error) {
+            this.logger.error(
+                "Failed to bootstrap documents from Firestore; RAG will fall back to empty index.",
+                error as Error,
+            )
+        }
     }
 
     async queryRag(params: { query: string; topK: number; chatModel?: string }) {
@@ -81,7 +97,9 @@ export class RagService {
         const contextString = retrievedDocs
             .map(
                 (d, i) =>
-                    `Document ${i + 1} (id=${d.id}):\n${d.text}\nmetadata: ${JSON.stringify(d.metadata ?? {})}`,
+                    `Document ${i + 1} (id=${d.id}):\n${d.text}\nmetadata: ${JSON.stringify(
+                        d.metadata ?? {},
+                    )}`,
             )
             .join("\n\n")
 

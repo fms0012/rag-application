@@ -20,6 +20,8 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "dotenv": "^17.2.3",
+    "faiss-node": "^0.5.1",
+    "firebase-admin": "^13.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0"
   },
