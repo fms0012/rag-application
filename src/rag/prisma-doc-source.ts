@@ -42,6 +42,8 @@ export class PrismaDocSource implements DocumentSource {
             // @ts-ignore - The client is generated dynamically, so RagDocument might not be visible to TS yet if not built
             const rows = await this.client.ragDocument.findMany()
 
+            console.log(rows)
+
             console.log(`✓ Loaded ${rows.length} documents from Prisma model "RagDocument"`)
 
             return rows.map((row: any) => ({
