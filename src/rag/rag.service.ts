@@ -1,11 +1,14 @@
 import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common"
 import { GoogleGenAI } from "@google/genai"
 import { StoredDocument } from "./vector-store"
+import { DocumentSource } from "./document-source"
 import { FaissVectorStore } from "./faiss-vector-store"
 import { FirebaseDocSource } from "./firebase-doc-source"
+import { PrismaDocSource } from "./prisma-doc-source"
+import { PrismaClient } from "@prisma/client"
 
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
-const DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+const DEFAULT_CHAT_MODEL = "gemini-3-flash-preview"
 
 @Injectable()
 export class RagService {
@@ -29,25 +32,45 @@ export class RagService {
 
     private async bootstrapDocuments() {
         try {
-            const collectionPath = process.env.FIREBASE_RAG_COLLECTION_PATH ?? "Retrievers"
-            const textField = process.env.FIREBASE_RAG_TEXT_FIELD ?? "retriever_description" // ← Changed!
-            const metadataFields = (
-                process.env.FIREBASE_RAG_METADATA_FIELDS ?? "retriever_name,document"
-            ) // ← Changed!
-                .split(",")
-                .map(f => f.trim())
+            const sourceType = process.env.RAG_SOURCE_TYPE || "firebase"
+            let source: DocumentSource
 
-            const source = new FirebaseDocSource({
-                collectionPath,
-                textField,
-                metadataFields,
-            })
+            if (sourceType === "mysql" || sourceType === "prisma") {
+                const prisma = new PrismaClient()
+                // Ensure connection
+                await prisma.$connect()
+
+                source = new PrismaDocSource({
+                    client: prisma,
+                    // Pass env vars to allow dynamic "raw" usage if configured,
+                    // or fall back to defaults which map to the RagDocument model.
+                    table: process.env.MYSQL_RAG_TABLE,
+                    textColumn: process.env.MYSQL_RAG_TEXT_COLUMN,
+                    metadataColumns: (process.env.MYSQL_RAG_METADATA_COLUMNS || "")
+                        .split(",")
+                        .filter(Boolean),
+                })
+            } else {
+                const collectionPath = process.env.FIREBASE_RAG_COLLECTION_PATH ?? "Retrievers"
+                const textField = process.env.FIREBASE_RAG_TEXT_FIELD ?? "retriever_description"
+                const metadataFields = (
+                    process.env.FIREBASE_RAG_METADATA_FIELDS ?? "retriever_name,document"
+                )
+                    .split(",")
+                    .map(f => f.trim())
+
+                source = new FirebaseDocSource({
+                    collectionPath,
+                    textField,
+                    metadataFields,
+                })
+            }
 
             const firebaseDocs: Omit<StoredDocument, "embedding">[] = await source.loadDocuments()
 
             if (!firebaseDocs.length) {
                 this.logger.warn(
-                    `No documents loaded from Firestore collection "${collectionPath}". RAG will have no external knowledge until documents are added.`,
+                    `No documents loaded from source "${sourceType}". RAG will have no external knowledge until documents are added.`,
                 )
                 return
             }
@@ -103,9 +126,14 @@ export class RagService {
             )
             .join("\n\n")
 
+        // const systemPrompt = [
+        //     "You are a helpful assistant that answers questions using ONLY the provided context.",
+        //     "If the context is insufficient, say you are not sure instead of hallucinating.",
+        // ].join(" ")
+
         const systemPrompt = [
-            "You are a helpful assistant that answers questions using ONLY the provided context.",
-            "If the context is insufficient, say you are not sure instead of hallucinating.",
+            "Answer the question below as detailed as possible from the provided context below, make sure to provide all the details but if the answer is not inprovided context",
+            "Try not to make up an answer just for the sake of answering a question.",
         ].join(" ")
 
         const prompt = [

@@ -1,6 +1,7 @@
 import admin from "firebase-admin"
-import * as path from 'path';
+import * as path from "path"
 
+import { DocumentSource } from "./document-source"
 import { StoredDocument } from "./vector-store"
 
 export interface FirebaseDocConfig {
@@ -16,7 +17,7 @@ export interface FirebaseDocConfig {
  * - a `textField` containing the text to embed
  * - optional metadata fields (listed in `metadataFields`)
  */
-export class FirebaseDocSource {
+export class FirebaseDocSource implements DocumentSource {
     private readonly firestore: admin.firestore.Firestore
     private readonly config: FirebaseDocConfig
 
