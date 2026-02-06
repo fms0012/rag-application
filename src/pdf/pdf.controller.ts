@@ -39,13 +39,13 @@ export class PdfController {
         @UploadedFile() file: Express.Multer.File,
         @Body("forceOcr") forceOcr?: boolean,
     ) {
-        console.log(forceOcr)
+        console.log(file)
         if (!file) {
             throw new BadRequestException("No file uploaded")
         }
 
         try {
-            const text = await this.pdfService.extractText(file.path, forceOcr)
+            const text = await this.pdfService.extractText(file, forceOcr)
             await this.pdfService.cleanup(file.path)
 
             return {

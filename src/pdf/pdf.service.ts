@@ -3,28 +3,34 @@ import { execSync } from "child_process"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { PrismaService } from "src/prisma.service"
+import { FaissVectorStore } from "src/rag/faiss-vector-store"
+import { RagService } from "src/rag/rag.service"
 
 @Injectable()
 export class PdfService {
-    constructor(private readonly prisma: PrismaService) {}
-    async extractText(filePath: string, forceOcr = false): Promise<string> {
+    private readonly vectorStore = new FaissVectorStore()
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly ragService: RagService,
+    ) {}
+    async extractText(file: Express.Multer.File, forceOcr = false): Promise<string> {
         try {
             console.log("=== PDF Processing Started ===")
-            console.log("File path:", filePath)
+            console.log("File path:", file.path)
             console.log("Force OCR:", forceOcr)
 
             // Validate PDF file
-            await this.validatePdf(filePath)
+            await this.validatePdf(file.path)
             console.log("✓ PDF validation passed")
 
             if (forceOcr) {
                 console.log("→ Using forced OCR mode")
-                return await this.extractWithOcr(filePath)
+                return await this.extractWithOcr(file.path)
             }
 
             // Try direct text extraction first
             console.log("→ Attempting direct text extraction...")
-            const directText = await this.extractDirect(filePath)
+            const directText = await this.extractDirect(file.path)
 
             // If direct extraction has meaningful content, use it
             if (this.hasContent(directText)) {
@@ -34,7 +40,7 @@ export class PdfService {
 
             // Otherwise, fallback to OCR
             console.log("→ Direct extraction yielded minimal text, falling back to OCR...")
-            const ocrText = await this.extractWithOcr(filePath)
+            const ocrText = await this.extractWithOcr(file.path)
 
             const result = this.hasContent(directText) ? directText : ocrText
             const usedOcr = !this.hasContent(directText)
@@ -42,7 +48,7 @@ export class PdfService {
             console.log(`✓ Extraction complete (OCR: ${usedOcr}), text length: ${result.length}`)
 
             // Save to database with chunking
-            await this.saveToDatabase(filePath, result, usedOcr)
+            await this.saveToDatabase(file, result, usedOcr)
 
             return result
         } catch (error) {
@@ -52,20 +58,31 @@ export class PdfService {
         }
     }
 
-    private async saveToDatabase(filePath: string, content: string, ocrUsed: boolean) {
+    private async saveToDatabase(file: Express.Multer.File, content: string, ocrUsed: boolean) {
         const CHUNK_SIZE = 1000
 
         if (content.length <= CHUNK_SIZE) {
             // Save directly if within limits
-            await this.prisma.ragDocument.create({
+            const embedding = await this.ragService.embedText(content)
+
+            const doc = await this.prisma.ragDocument.create({
                 data: {
                     content,
+                    embedding,
+                    filename: file.originalname,
                     metadata: {
-                        filename: path.basename(filePath),
+                        filename: path.basename(file.path),
                         ocrUsed,
                         chunked: false,
                     },
                 },
+            })
+
+            this.vectorStore.addDocument({
+                id: doc.id.toString(),
+                text: doc.content,
+                embedding: embedding,
+                metadata: (doc.metadata as Record<string, unknown>) ?? {},
             })
             console.log("✓ Saved as single document")
         } else {
@@ -76,11 +93,13 @@ export class PdfService {
             const chunks = this.chunkText(content, CHUNK_SIZE)
 
             for (let i = 0; i < chunks.length; i++) {
-                await this.prisma.ragDocument.create({
+                const embedding = await this.ragService.embedText(chunks[i])
+                const doc = await this.prisma.ragDocument.create({
                     data: {
                         content: chunks[i],
+                        embedding,
+                        filename: file.originalname,
                         metadata: {
-                            filename: path.basename(filePath),
                             ocrUsed,
                             chunked: true,
                             chunkIndex: i,
@@ -88,7 +107,15 @@ export class PdfService {
                         },
                     },
                 })
+
+                this.vectorStore.addDocument({
+                    id: doc.id.toString(),
+                    text: doc.content,
+                    embedding: embedding,
+                    metadata: (doc.metadata as Record<string, unknown>) ?? {},
+                })
             }
+
             console.log(`✓ Saved as ${chunks.length} chunks`)
         }
     }

@@ -1,4 +1,5 @@
-import { IsInt, IsOptional, IsString, Max, Min } from "class-validator"
+import { Type } from "class-transformer"
+import { IsArray, IsInt, IsOptional, IsString, Max, Min, ValidateNested } from "class-validator"
 
 export class RagQueryDto {
     @IsString()
@@ -13,4 +14,18 @@ export class RagQueryDto {
     @IsOptional()
     @IsString()
     chatModel?: string
+
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => MessageDto)
+    conversationHistory?: MessageDto[]
+}
+
+export class MessageDto {
+    @IsString()
+    role!: "user" | "bot"
+
+    @IsString()
+    text!: string
 }

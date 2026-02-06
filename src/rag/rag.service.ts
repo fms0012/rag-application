@@ -66,25 +66,24 @@ export class RagService {
                 })
             }
 
-            const firebaseDocs: Omit<StoredDocument, "embedding">[] = await source.loadDocuments()
+            const docs: StoredDocument[] = await source.loadDocuments()
 
-            if (!firebaseDocs.length) {
+            if (!docs.length) {
                 this.logger.warn(
                     `No documents loaded from source "${sourceType}". RAG will have no external knowledge until documents are added.`,
                 )
                 return
             }
 
-            for (const doc of firebaseDocs) {
-                const embedding = await this.embedText(doc.text)
+            for (const doc of docs) {
                 this.vectorStore.addDocument({
                     ...doc,
-                    embedding,
+                    // embedding: doc.embedding,
                 })
             }
 
             this.logger.log(
-                `Bootstrapped ${firebaseDocs.length} Firestore documents into the FAISS vector store.`,
+                `Bootstrapped ${docs.length} Firestore documents into the FAISS vector store.`,
             )
         } catch (error) {
             this.logger.error(
@@ -94,8 +93,16 @@ export class RagService {
         }
     }
 
-    async queryRag(params: { query: string; topK: number; chatModel?: string }) {
-        const { query, topK, chatModel } = params
+    async queryRag(params: {
+        query: string
+        topK: number
+        chatModel?: string
+        conversationHistory?: Array<{ role: "user" | "bot"; text: string }>
+    }) {
+        const { query, topK, chatModel, conversationHistory } = params
+        const MAX_HISTORY_TURNS = 3
+        const recentHistory = (conversationHistory || []).slice(-MAX_HISTORY_TURNS * 2)
+        console.log("Recent history:", recentHistory)
 
         const queryEmbedding = await this.embedText(query)
         const retrievedDocs = this.vectorStore.similaritySearch(queryEmbedding, topK)
@@ -137,7 +144,7 @@ export class RagService {
         ].join(" ")
 
         const prompt = [
-            systemPrompt,
+            // systemPrompt,
             "\n\nContext:\n",
             contextString,
             "\n\nUser question:\n",
@@ -149,7 +156,14 @@ export class RagService {
             const modelToUse = chatModel || DEFAULT_CHAT_MODEL
             const response = await this.ai.models.generateContent({
                 model: modelToUse,
+                config: {
+                    systemInstruction: systemPrompt,
+                },
                 contents: [
+                    ...(recentHistory?.map(msg => ({
+                        role: msg.role === "bot" ? "model" : "user",
+                        parts: [{ text: msg.text }],
+                    })) ?? []),
                     {
                         role: "user",
                         parts: [{ text: prompt }],
@@ -171,7 +185,7 @@ export class RagService {
         }
     }
 
-    private async embedText(text: string): Promise<number[]> {
+    async embedText(text: string): Promise<number[]> {
         if (!this.ai) {
             // Fallback: deterministic pseudo-embedding if Gemini is not configured.
             // This keeps retrieval logic working for experimentation.

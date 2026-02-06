@@ -48,10 +48,10 @@ export class FirebaseDocSource implements DocumentSource {
         this.config = config
     }
 
-    async loadDocuments(): Promise<Omit<StoredDocument, "embedding">[]> {
+    async loadDocuments(): Promise<StoredDocument[]> {
         const snapshot = await this.firestore.collection(this.config.collectionPath).get()
 
-        const docs: Omit<StoredDocument, "embedding">[] = []
+        const docs: StoredDocument[] = []
 
         snapshot.forEach((docSnap: admin.firestore.QueryDocumentSnapshot) => {
             const data = docSnap.data() as Record<string, unknown>
@@ -73,6 +73,7 @@ export class FirebaseDocSource implements DocumentSource {
                 id: docSnap.id,
                 text,
                 metadata,
+                embedding: [],
             })
         })
 
