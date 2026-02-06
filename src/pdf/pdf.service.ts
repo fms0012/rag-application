@@ -28,28 +28,21 @@ export class PdfService {
 
             // If direct extraction has meaningful content, use it
             if (this.hasContent(directText)) {
-                console.log("✓ Direct extraction successful, returning result")
+                console.log("✓ Direct extraction successful")
                 return directText
             }
 
             // Otherwise, fallback to OCR
             console.log("→ Direct extraction yielded minimal text, falling back to OCR...")
-            // return await this.extractWithOcr(filePath)
+            const ocrText = await this.extractWithOcr(filePath)
 
-            const result = this.hasContent(directText)
-                ? directText
-                : await this.extractWithOcr(filePath)
+            const result = this.hasContent(directText) ? directText : ocrText
+            const usedOcr = !this.hasContent(directText)
 
-            // Save to database
-            await this.prisma.ragDocument.create({
-                data: {
-                    content: result,
-                    metadata: {
-                        filename: path.basename(filePath),
-                        ocrUsed: !this.hasContent(directText),
-                    },
-                },
-            })
+            console.log(`✓ Extraction complete (OCR: ${usedOcr}), text length: ${result.length}`)
+
+            // Save to database with chunking
+            await this.saveToDatabase(filePath, result, usedOcr)
 
             return result
         } catch (error) {
@@ -57,6 +50,59 @@ export class PdfService {
             console.error("Error:", error)
             throw new BadRequestException(`Failed to process PDF: ${error}`)
         }
+    }
+
+    private async saveToDatabase(filePath: string, content: string, ocrUsed: boolean) {
+        const CHUNK_SIZE = 1000
+
+        if (content.length <= CHUNK_SIZE) {
+            // Save directly if within limits
+            await this.prisma.ragDocument.create({
+                data: {
+                    content,
+                    metadata: {
+                        filename: path.basename(filePath),
+                        ocrUsed,
+                        chunked: false,
+                    },
+                },
+            })
+            console.log("✓ Saved as single document")
+        } else {
+            // Split into chunks
+            console.log(
+                `⚠ Content too large (${content.length} chars), chunking into ${CHUNK_SIZE} char chunks...`,
+            )
+            const chunks = this.chunkText(content, CHUNK_SIZE)
+
+            for (let i = 0; i < chunks.length; i++) {
+                await this.prisma.ragDocument.create({
+                    data: {
+                        content: chunks[i],
+                        metadata: {
+                            filename: path.basename(filePath),
+                            ocrUsed,
+                            chunked: true,
+                            chunkIndex: i,
+                            totalChunks: chunks.length,
+                        },
+                    },
+                })
+            }
+            console.log(`✓ Saved as ${chunks.length} chunks`)
+        }
+    }
+
+    private chunkText(text: string, chunkSize: number): string[] {
+        const chunks: string[] = []
+        let start = 0
+
+        while (start < text.length) {
+            chunks.push(text.slice(start, start + chunkSize))
+            start += chunkSize
+        }
+
+        return chunks
     }
 
     private async extractDirect(filePath: string): Promise<string> {

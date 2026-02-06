@@ -1,25 +1,25 @@
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module';
+import { NestFactory } from "@nestjs/core"
+import { ValidationPipe } from "@nestjs/common"
+import { AppModule } from "./app.module"
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+    const app = await NestFactory.create(AppModule)
+    app.enableCors()
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+    app.useGlobalPipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
 
-  app.setGlobalPrefix('api');
+    app.setGlobalPrefix("api")
 
-  const port = process.env.PORT || 3000;
-  await app.listen(port);
-  // eslint-disable-next-line no-console
-  console.log(`RAG API is running on http://localhost:${port}/api`);
+    const port = process.env.PORT || 3000
+    await app.listen(port)
+    // eslint-disable-next-line no-console
+    console.log(`RAG API is running on http://localhost:${port}/api`)
 }
 
-bootstrap();
-
+bootstrap()

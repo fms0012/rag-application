@@ -13,8 +13,7 @@ export class RagController {
 
     @Post("query")
     async query(@Body() body: RagQueryDto) {
-        console.log(body)
-        const { query, topK = 3, chatModel } = body
-        return this.ragService.queryRag({ query, topK, chatModel })
+        const { question, topK = 3, chatModel } = body
+        return this.ragService.queryRag({ query: question, topK, chatModel })
     }
 }

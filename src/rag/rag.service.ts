@@ -7,8 +7,8 @@ import { FirebaseDocSource } from "./firebase-doc-source"
 import { PrismaDocSource } from "./prisma-doc-source"
 import { PrismaClient } from "@prisma/client"
 
-const DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
-const DEFAULT_CHAT_MODEL = "gemini-3-flash-preview"
+const DEFAULT_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "text-embedding-004"
+const DEFAULT_CHAT_MODEL = process.env.GEMINI_CHAT_MODEL || "gemini-2.5-flash-lite"
 
 @Injectable()
 export class RagService {
@@ -132,7 +132,7 @@ export class RagService {
         // ].join(" ")
 
         const systemPrompt = [
-            "Answer the question below as detailed as possible from the provided context below, make sure to provide all the details but if the answer is not inprovided context",
+            "Answer the question below as detailed as possible from the provided context below, make sure to provide all the details but if the answer is not in provided context",
             "Try not to make up an answer just for the sake of answering a question.",
         ].join(" ")
 
@@ -160,6 +160,7 @@ export class RagService {
             const answer = response.text ?? ""
 
             return {
+                question: query,
                 answer,
                 model: modelToUse,
                 retrievedDocs,
