@@ -39,7 +39,6 @@ export class PdfController {
         @UploadedFile() file: Express.Multer.File,
         @Body("forceOcr") forceOcr?: boolean,
     ) {
-        console.log(file)
         if (!file) {
             throw new BadRequestException("No file uploaded")
         }
