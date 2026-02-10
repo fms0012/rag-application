@@ -14,11 +14,9 @@ export interface PrismaDocConfig {
 
 export class PrismaDocSource implements DocumentSource {
     private readonly client: PrismaClient
-    private readonly config: PrismaDocConfig
 
     constructor(config: PrismaDocConfig) {
         this.client = config.client
-        this.config = config
     }
 
     async loadDocuments(): Promise<StoredDocument[]> {
