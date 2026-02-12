@@ -134,121 +134,28 @@ export class PdfService {
 
     private async extractDirect(filePath: string): Promise<string> {
         try {
-            // Normalize path for cross-platform compatibility
             const normalizedPath = filePath.replace(/\\/g, "/")
 
-            console.log("Attempting direct text extraction for:", normalizedPath)
+            const scriptPath = path.join(
+                process.cwd(),
+                "src",
+                "pdf",
+                "scripts",
+                "direct_extract.py",
+            )
 
-            const script = `
-import pdfplumber
-import sys
-
-try:
-    with pdfplumber.open("${normalizedPath}") as pdf:
-        print(f"PDF has {len(pdf.pages)} pages", file=sys.stderr)
-        text = ""
-        for i, page in enumerate(pdf.pages):
-            page_text = page.extract_text() or ""
-            print(f"Page {i+1}: {len(page_text)} characters", file=sys.stderr)
-            if page_text:
-                text += f"--- Page {i+1} ---\\n{page_text}\\n\\n"
-        
-        if not text:
-            print("WARNING: No text extracted from PDF", file=sys.stderr)
-        else:
-            print(f"Total text extracted: {len(text)} characters", file=sys.stderr)
-        
-        print(text)
-except Exception as e:
-    print(f"ERROR in direct extraction: {str(e)}", file=sys.stderr)
-    import traceback
-    traceback.print_exc(file=sys.stderr)
-`
-
-            // Use python or python3 depending on platform
             const pythonCmd = process.platform === "win32" ? "python" : "python3"
-            const result = execSync(`${pythonCmd} -c "${script.replace(/"/g, '\\"')}"`, {
+
+            const result = execSync(`${pythonCmd} "${scriptPath}" "${normalizedPath}"`, {
                 encoding: "utf-8",
-                maxBuffer: 10 * 1024 * 1024,
+                maxBuffer: 20 * 1024 * 1024,
             })
 
-            console.log("Direct extraction result length:", result.length)
-            console.log("First 200 chars:", result.substring(0, 200))
-
             return result.trim()
-        } catch (error) {
-            console.error("Direct extraction error:", error)
-            if (error) {
-                console.error("Python stderr:", error)
-            }
-            return ""
+        } catch (error: any) {
+            throw new Error(`Direct extraction failed: ${error?.message || error}`)
         }
     }
-
-    //     private async extractWithOcr(filePath: string): Promise<string> {
-    //         try {
-    //             // Normalize path for cross-platform compatibility
-    //             const normalizedPath = filePath.replace(/\\/g, "/")
-
-    //             console.log("Starting OCR for file:", normalizedPath)
-
-    //             const script = `
-    // import pytesseract
-    // from pdf2image import convert_from_path
-    // import sys
-
-    // try:
-    //     print("Converting PDF to images...", file=sys.stderr)
-    //     images = convert_from_path("${normalizedPath}", dpi=300)
-    //     print(f"Converted {len(images)} pages", file=sys.stderr)
-
-    //     text = ""
-    //     for i, image in enumerate(images):
-    //         print(f"Processing page {i+1}...", file=sys.stderr)
-    //         page_text = pytesseract.image_to_string(image, lang='eng')
-    //         print(f"Page {i+1} extracted {len(page_text)} characters", file=sys.stderr)
-    //         if page_text.strip():
-    //             text += f"--- Page {i+1} ---\\n{page_text}\\n\\n"
-
-    //     if not text:
-    //         print("WARNING: No text extracted!", file=sys.stderr)
-    //     else:
-    //         print(f"Total text length: {len(text)}", file=sys.stderr)
-
-    //     print(text)
-    // except Exception as e:
-    //     print(f"ERROR: {str(e)}", file=sys.stderr)
-    //     import traceback
-    //     traceback.print_exc(file=sys.stderr)
-    //     raise
-    // `
-
-    //             // Use python or python3 depending on platform
-    //             const pythonCmd = process.platform === "win32" ? "python" : "python3"
-    //             const result = execSync(`${pythonCmd} -c "${script.replace(/"/g, '\\"')}"`, {
-    //                 encoding: "utf-8",
-    //                 maxBuffer: 20 * 1024 * 1024,
-    //                 timeout: 300000,
-    //             })
-
-    //             console.log("OCR completed. Result length:", result.length)
-
-    //             if (!result || result.trim().length === 0) {
-    //                 throw new Error("OCR returned empty result")
-    //             }
-
-    //             return result.trim()
-    //         } catch (error) {
-    //             console.error("OCR Error:", error)
-    //             if (error) {
-    //                 console.error("Python stderr:", error)
-    //             }
-    //             if (error) {
-    //                 console.error("Python stdout:", error)
-    //             }
-    //             throw new Error(`OCR failed: ${error}`)
-    //         }
-    //     }
 
     private async extractWithOcr(filePath: string): Promise<string> {
         try {

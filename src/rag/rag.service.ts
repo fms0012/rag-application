@@ -30,7 +30,7 @@ export interface RagQueryResponse {
 export class RagService {
     private readonly logger = new Logger(RagService.name)
     private readonly ai: GoogleGenAI | null
-    private readonly vectorStore = new FaissVectorStore("Flat")
+    private readonly vectorStore = new FaissVectorStore("HNSW")
     private readonly prisma = new PrismaClient()
 
     constructor() {
@@ -100,11 +100,21 @@ export class RagService {
     }): Promise<RagQueryResponse> {
         const { query, topK, chatModel, conversationHistory } = params
 
-        // Increase history window for better context retention
         const MAX_HISTORY_TURNS = 5
         const recentHistory = (conversationHistory || []).slice(-MAX_HISTORY_TURNS * 2)
 
-        const queryEmbedding = await this.embedText(query)
+        if (!this.ai) {
+            throw new Error("Gemini not configured")
+        }
+
+        // STEP 1 — Rewrite query into standalone question
+        const standaloneQuery = await this.rewriteQueryWithHistory(query, recentHistory)
+
+        // STEP 2 — Hybrid embedding (includes history context)
+        const embeddingInput = this.buildEmbeddingContext(standaloneQuery, recentHistory)
+        const queryEmbedding = await this.embedText(embeddingInput)
+
+        // STEP 3 — Retrieve documents
         const { documents: retrievedDocs, distances } = this.vectorStore.similaritySearch(
             queryEmbedding,
             topK,
@@ -112,181 +122,143 @@ export class RagService {
 
         if (!retrievedDocs.length) {
             return {
-                answer: "I don't have any information available in my knowledge base yet. Could you try asking something else or provide me with some documents to learn from?",
-                message: "No documents available in the vector store.",
+                answer: "I don't have any information available in my knowledge base yet.",
                 retrievedDocs: [],
                 distances: [],
             }
         }
 
-        if (!this.ai) {
-            return {
-                answer: null,
-                message:
-                    "GEMINI_API_KEY (or GOOGLE_API_KEY) is not configured. RAG retrieval works, but generation is disabled. Configure the key to enable full RAG.",
-                retrievedDocs,
-                distances,
-            }
-        }
+        // STEP 4 — Dynamic relevance filtering
+        const threshold = this.calculateDynamicThreshold(distances)
 
-        // Filter out low-relevance documents based on distance threshold
-        // Lower distance = more similar (for L2 distance)
-        const RELEVANCE_THRESHOLD = this.calculateDynamicThreshold(distances)
         const relevantIndices = distances
-            .map((d, i) => ({ distance: d, index: i }))
-            .filter(item => item.distance <= RELEVANCE_THRESHOLD)
-            .map(item => item.index)
+            .map((d, i) => ({ d, i }))
+            .filter(item => item.d <= threshold)
+            .map(item => item.i)
 
         const relevantDocs = relevantIndices.map(i => retrievedDocs[i])
         const relevantDistances = relevantIndices.map(i => distances[i])
 
-        if (relevantDocs.length === 0) {
+        if (!relevantDocs.length) {
             return {
                 question: query,
-                answer: "I apologize, but I couldn't find relevant information in my knowledge base to answer your question confidently. Could you rephrase your question or ask about a different topic?",
-                model: chatModel || DEFAULT_CHAT_MODEL,
+                answer: "I couldn't find relevant information in my knowledge base.",
                 retrievedDocs: [],
                 distances: [],
                 lowConfidence: true,
             }
         }
 
-        // Build context with relevance scores
+        // STEP 5 — Build context string
         const contextString = relevantDocs
-            .map((d, i) => {
-                const relevanceScore = this.getRelevanceScore(relevantDistances[i])
-                return `[Document ${i + 1} - Relevance: ${relevanceScore}%]\n${d.text}\n${
-                    d.metadata ? `Metadata: ${JSON.stringify(d.metadata)}` : ""
-                }`
-            })
+            .map((doc, i) => `[Doc ${i + 1}]\n${doc.text}`)
             .join("\n\n---\n\n")
 
-        // Enhanced system prompt to reduce hallucinations and improve conversation
-        const systemPrompt = `You are a friendly and helpful AI assistant. Your goal is to provide accurate, conversational responses.
-            CRITICAL RULES:
-            1. ONLY use information from the provided context documents below
-            2. If the context doesn't contain the answer, clearly say "I don't have that information" or "I'm not sure about that based on what I know"
-            3. NEVER make up or infer information that isn't explicitly in the context
-            4. Be conversational and friendly, but always prioritize accuracy over being helpful
-            5. If you're unsure, express uncertainty rather than guessing
-            6. Reference the conversation history to maintain context and avoid repeating yourself
-            7. When answering, you can synthesize information from multiple documents, but don't add external knowledge
-            8. Do not answer questions that are not related to the context
+        // STEP 6 — Summarize conversation history
+        const historySummary = await this.summarizeHistory(recentHistory)
 
-            CONVERSATION STYLE:
-            - Be warm and approachable
-            - Use natural language, not robotic responses
-            - Remember what was discussed earlier in the conversation
-            - If asked a follow-up question, connect it to previous exchanges
+        // STEP 7 — Build final prompt
+        const systemPrompt = `You are a conversational RAG assistant.
+            RULES:
+                - ONLY use the provided context.
+                - If answer is not in context, say you don't know instead of hallucinating.
+                - Do not hallucinate.
+                - Answer conversationally.
 
-            Remember: It's better to say "I don't know" than to provide incorrect information.`
+            CONTEXT:
+                ${contextString}`
 
-        // Build conversation-aware prompt
-        const userPrompt = this.buildConversationalPrompt(query, contextString, recentHistory)
+        const userPrompt = `Conversation summary:
+            ${historySummary}
+            User question:
+            ${query}`
 
-        try {
-            const modelToUse = chatModel || DEFAULT_CHAT_MODEL
 
-            // Build the full conversation with context
-            const contents = [
-                // Include recent conversation history
-                ...(recentHistory?.map(msg => ({
-                    role: msg.role === "bot" ? ("model" as const) : ("user" as const),
-                    parts: [{ text: msg.text }],
-                })) ?? []),
-                // Current query with context
-                {
-                    role: "user" as const,
-                    parts: [{ text: userPrompt }],
-                },
-            ]
-
-            const response = await this.ai.models.generateContent({
-                model: modelToUse,
-                config: {
-                    systemInstruction: systemPrompt,
-                    // temperature: 0.3, // Lower temperature to reduce creativity/hallucination
-                    topP: 0.8,
-                    topK: 40,
-                    maxOutputTokens: 2048,
-                },
-                contents,
-            })
-
-            const answer = response.text ?? ""
-
-            // Detect potential hallucination by checking if answer references context
-            const confidenceScore = this.assessAnswerConfidence(answer, relevantDocs)
-
-            return {
-                question: query,
-                answer,
-                model: modelToUse,
-                retrievedDocs: relevantDocs,
-                distances: relevantDistances,
-                confidenceScore,
-                metadata: {
-                    documentsUsed: relevantDocs.length,
-                    averageRelevance: this.calculateAverageRelevance(relevantDistances),
-                },
-            }
-        } catch (error) {
-            this.logger.error("Error calling Gemini for RAG answer", error as Error)
-            throw new InternalServerErrorException(
-                "I apologize, but I encountered an error while processing your question. Please try again.",
-            )
-        }
-    }
-
-    /**
-     * Build a conversational prompt that references chat history
-     */
-    private buildConversationalPrompt(
-        query: string,
-        contextString: string,
-        history: Array<{ role: "user" | "bot"; text: string }>,
-    ): string {
-        const hasHistory = history && history.length > 0
-
-        if (hasHistory) {
-            // Check if this is a follow-up question
-            const isFollowUp = this.isFollowUpQuestion(query)
-
-            if (isFollowUp) {
-                return `CONTEXT DOCUMENTS:
-                        ${contextString}
-
-                        ---
-
-                        CURRENT QUESTION: ${query}
-
-                        Note: This appears to be a follow-up to our previous conversation. Please consider the conversation history when answering, and reference it if relevant. Use the context documents above to answer accurately.`
-            }
-        }
-
-        return `CONTEXT DOCUMENTS:
-                        ${contextString}
-
-                        ---
-
-                        QUESTION: ${query}
-
-                        Please answer the question above using ONLY the information from the context documents. Be friendly and conversational in your response.`
-    }
-
-    /**
-     * Detect if a question is a follow-up based on pronouns and references
-     */
-    private isFollowUpQuestion(query: string): boolean {
-        const followUpIndicators = [
-            /\b(it|that|this|these|those|they|them)\b/i,
-            /\b(what about|how about|tell me more)\b/i,
-            /\b(also|additionally|furthermore|moreover)\b/i,
-            /\b(previous|earlier|before|last)\b/i,
-            /^(and|but|or|so)\b/i,
+        const contents = [
+            {
+                role: "user" as const,
+                parts: [{ text: userPrompt }],
+            },
         ]
 
-        return followUpIndicators.some(pattern => pattern.test(query))
+        // STEP 8 — Generate answer
+        const response = await this.ai.models.generateContent({
+            model: chatModel || DEFAULT_CHAT_MODEL,
+            config: {
+                systemInstruction: systemPrompt,
+                temperature: 0.2,
+                topP: 0.8,
+                maxOutputTokens: 2048,
+            },
+            contents,
+        })
+
+        const answer = response.text ?? ""
+
+        // ✅ STEP 9 — Confidence scoring
+        const confidenceScore = this.assessAnswerConfidence(answer, relevantDocs)
+
+        return {
+            question: query,
+            answer,
+            retrievedDocs: relevantDocs,
+            distances: relevantDistances,
+            confidenceScore,
+            metadata: {
+                documentsUsed: relevantDocs.length,
+                averageRelevance: this.calculateAverageRelevance(relevantDistances),
+            },
+        }
+    }
+
+    async rewriteQueryWithHistory(
+        query: string,
+        history: Array<{ role: string; text: string }>,
+    ): Promise<string> {
+        if (!history?.length) return query
+
+        const historyText = history.map(m => `${m.role}: ${m.text}`).join("\n")
+
+        const prompt = `Replace the user's latest question into a standalone question.
+
+            Conversation:${historyText}
+            Latest question:${query}
+            Standalone question:
+        `
+
+        const response = await this.ai?.models.generateContent({
+            model: DEFAULT_CHAT_MODEL,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+        })
+
+        return response?.text?.trim() || query
+    }
+
+    buildEmbeddingContext(query: string, history: any[]) {
+        if (!history?.length) return query
+
+        const historyText = history
+            .slice(-4)
+            .map(m => m.text)
+            .join("\n")
+
+        return `Current question: ${query}
+                Recent discussion: ${historyText}`
+    }
+
+    async summarizeHistory(history: any[]) {
+        if (!history?.length) return "No prior conversation."
+
+        const text = history.map(m => `${m.role}: ${m.text}`).join("\n")
+
+        const prompt = `Summarize this conversation briefly for context: ${text}`
+
+        const response = await this.ai?.models.generateContent({
+            model: DEFAULT_CHAT_MODEL,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+        })
+
+        return response?.text ?? ""
     }
 
     /**

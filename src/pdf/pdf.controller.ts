@@ -6,16 +6,35 @@ import {
     BadRequestException,
     Body,
 } from "@nestjs/common"
+import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiResponse } from "@nestjs/swagger"
 import { FileInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
 import { extname } from "path"
 import { PdfService } from "./pdf.service"
 
+@ApiTags("PDF")
 @Controller("pdf")
 export class PdfController {
     constructor(private readonly pdfService: PdfService) {}
 
     @Post("upload")
+    @ApiOperation({ summary: "Upload a PDF file" })
+    @ApiConsumes("multipart/form-data")
+    @ApiBody({
+        schema: {
+            type: "object",
+            properties: {
+                file: {
+                    type: "string",
+                    format: "binary",
+                },
+                forceOcr: {
+                    type: "boolean",
+                },
+            },
+        },
+    })
+    @ApiResponse({ status: 201, description: "File uploaded successfully" })
     @UseInterceptors(
         FileInterceptor("file", {
             storage: diskStorage({
